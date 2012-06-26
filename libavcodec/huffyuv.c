@@ -82,13 +82,15 @@ typedef struct HYuvContext{
     DSPContext dsp;
 }HYuvContext;
 
-static const unsigned char classic_shift_luma[] = {
+#define classic_shift_luma_table_size 42
+static const unsigned char classic_shift_luma[classic_shift_luma_table_size + FF_INPUT_BUFFER_PADDING_SIZE] = {
   34,36,35,69,135,232,9,16,10,24,11,23,12,16,13,10,14,8,15,8,
   16,8,17,20,16,10,207,206,205,236,11,8,10,21,9,23,8,8,199,70,
   69,68, 0
 };
 
-static const unsigned char classic_shift_chroma[] = {
+#define classic_shift_chroma_table_size 59
+static const unsigned char classic_shift_chroma[classic_shift_chroma_table_size + FF_INPUT_BUFFER_PADDING_SIZE] = {
   66,36,37,38,39,40,41,75,76,77,110,239,144,81,82,83,84,85,118,183,
   56,57,88,89,56,89,154,57,58,57,26,141,57,56,58,57,58,57,184,119,
   214,245,116,83,82,49,80,79,78,77,44,75,41,40,39,38,37,36,34, 0
@@ -184,7 +186,7 @@ static int read_len_table(uint8_t *dst, GetBitContext *gb){
         if(repeat==0)
             repeat= get_bits(gb, 8);
 //printf("%d %d\n", val, repeat);
-        if(i+repeat > 256) {
+        if(i+repeat > 256 || get_bits_left(gb) < 0) {
             av_log(NULL, AV_LOG_ERROR, "Error reading huffman table\n");
             return -1;
         }
@@ -366,10 +368,10 @@ static int read_old_huffman_tables(HYuvContext *s){
     GetBitContext gb;
     int i;
 
-    init_get_bits(&gb, classic_shift_luma, sizeof(classic_shift_luma)*8);
+    init_get_bits(&gb, classic_shift_luma, classic_shift_luma_table_size*8);
     if(read_len_table(s->len[0], &gb)<0)
         return -1;
-    init_get_bits(&gb, classic_shift_chroma, sizeof(classic_shift_chroma)*8);
+    init_get_bits(&gb, classic_shift_chroma, classic_shift_chroma_table_size*8);
     if(read_len_table(s->len[1], &gb)<0)
         return -1;
 
@@ -514,7 +516,7 @@ s->bgr32=1;
         }
         break;
     default:
-        assert(0);
+        return AVERROR_INVALIDDATA;
     }
 
     alloc_temp(s);
@@ -718,7 +720,7 @@ static void decode_422_bitstream(HYuvContext *s, int count){
     count/=2;
 
     if(count >= (get_bits_left(&s->gb))/(31*4)){
-        for(i=0; i<count && get_bits_count(&s->gb) < s->gb.size_in_bits; i++){
+        for (i = 0; i < count && get_bits_left(&s->gb) > 0; i++) {
             READ_2PIX(s->temp[0][2*i  ], s->temp[1][i], 1);
             READ_2PIX(s->temp[0][2*i+1], s->temp[2][i], 2);
         }
@@ -736,7 +738,7 @@ static void decode_gray_bitstream(HYuvContext *s, int count){
     count/=2;
 
     if(count >= (get_bits_left(&s->gb))/(31*2)){
-        for(i=0; i<count && get_bits_count(&s->gb) < s->gb.size_in_bits; i++){
+        for (i = 0; i < count && get_bits_left(&s->gb) > 0; i++) {
             READ_2PIX(s->temp[0][2*i  ], s->temp[0][2*i+1], 0);
         }
     }else{
@@ -921,8 +923,8 @@ static int encode_bgr_bitstream(HYuvContext *s, int count){
 
 #if CONFIG_HUFFYUV_DECODER || CONFIG_FFVHUFF_DECODER
 static void draw_slice(HYuvContext *s, int y){
-    int h, cy;
-    int offset[4];
+    int h, cy, i;
+    int offset[AV_NUM_DATA_POINTERS];
 
     if(s->avctx->draw_horiz_band==NULL)
         return;
@@ -939,7 +941,8 @@ static void draw_slice(HYuvContext *s, int y){
     offset[0] = s->picture.linesize[0]*y;
     offset[1] = s->picture.linesize[1]*cy;
     offset[2] = s->picture.linesize[2]*cy;
-    offset[3] = 0;
+    for (i = 3; i < AV_NUM_DATA_POINTERS; i++)
+        offset[i] = 0;
     emms_c();
 
     s->avctx->draw_horiz_band(s->avctx, &s->picture, offset, y, 3, h);
@@ -1435,16 +1438,14 @@ static av_cold int encode_end(AVCodecContext *avctx)
 
 #if CONFIG_HUFFYUV_DECODER
 AVCodec ff_huffyuv_decoder = {
-    "huffyuv",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_HUFFYUV,
-    sizeof(HYuvContext),
-    decode_init,
-    NULL,
-    decode_end,
-    decode_frame,
-    CODEC_CAP_DR1 | CODEC_CAP_DRAW_HORIZ_BAND | CODEC_CAP_FRAME_THREADS,
-    NULL,
+    .name           = "huffyuv",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_HUFFYUV,
+    .priv_data_size = sizeof(HYuvContext),
+    .init           = decode_init,
+    .close          = decode_end,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1 | CODEC_CAP_DRAW_HORIZ_BAND | CODEC_CAP_FRAME_THREADS,
     .init_thread_copy = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
     .long_name = NULL_IF_CONFIG_SMALL("Huffyuv / HuffYUV"),
 };
@@ -1452,16 +1453,14 @@ AVCodec ff_huffyuv_decoder = {
 
 #if CONFIG_FFVHUFF_DECODER
 AVCodec ff_ffvhuff_decoder = {
-    "ffvhuff",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_FFVHUFF,
-    sizeof(HYuvContext),
-    decode_init,
-    NULL,
-    decode_end,
-    decode_frame,
-    CODEC_CAP_DR1 | CODEC_CAP_DRAW_HORIZ_BAND | CODEC_CAP_FRAME_THREADS,
-    NULL,
+    .name           = "ffvhuff",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_FFVHUFF,
+    .priv_data_size = sizeof(HYuvContext),
+    .init           = decode_init,
+    .close          = decode_end,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1 | CODEC_CAP_DRAW_HORIZ_BAND | CODEC_CAP_FRAME_THREADS,
     .init_thread_copy = ONLY_IF_THREADS_ENABLED(decode_init_thread_copy),
     .long_name = NULL_IF_CONFIG_SMALL("Huffyuv FFmpeg variant"),
 };
@@ -1469,13 +1468,13 @@ AVCodec ff_ffvhuff_decoder = {
 
 #if CONFIG_HUFFYUV_ENCODER
 AVCodec ff_huffyuv_encoder = {
-    "huffyuv",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_HUFFYUV,
-    sizeof(HYuvContext),
-    encode_init,
-    encode_frame,
-    encode_end,
+    .name           = "huffyuv",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_HUFFYUV,
+    .priv_data_size = sizeof(HYuvContext),
+    .init           = encode_init,
+    .encode         = encode_frame,
+    .close          = encode_end,
     .pix_fmts= (const enum PixelFormat[]){PIX_FMT_YUV422P, PIX_FMT_RGB32, PIX_FMT_NONE},
     .long_name = NULL_IF_CONFIG_SMALL("Huffyuv / HuffYUV"),
 };
@@ -1483,13 +1482,13 @@ AVCodec ff_huffyuv_encoder = {
 
 #if CONFIG_FFVHUFF_ENCODER
 AVCodec ff_ffvhuff_encoder = {
-    "ffvhuff",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_FFVHUFF,
-    sizeof(HYuvContext),
-    encode_init,
-    encode_frame,
-    encode_end,
+    .name           = "ffvhuff",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_FFVHUFF,
+    .priv_data_size = sizeof(HYuvContext),
+    .init           = encode_init,
+    .encode         = encode_frame,
+    .close          = encode_end,
     .pix_fmts= (const enum PixelFormat[]){PIX_FMT_YUV420P, PIX_FMT_YUV422P, PIX_FMT_RGB32, PIX_FMT_NONE},
     .long_name = NULL_IF_CONFIG_SMALL("Huffyuv FFmpeg variant"),
 };

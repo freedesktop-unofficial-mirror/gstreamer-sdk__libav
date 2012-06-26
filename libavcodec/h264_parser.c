@@ -97,7 +97,7 @@ found:
     return i-(state&5);
 }
 
-/*!
+/**
  * Parse NAL units of found picture and decode some basic information.
  *
  * @param s parser context.
@@ -131,7 +131,7 @@ static inline int parse_nal_units(AVCodecParserContext *s,
 
     for(;;) {
         int src_length, dst_length, consumed;
-        buf = ff_find_start_code(buf, buf_end, &state);
+        buf = avpriv_mpv_find_start_code(buf, buf_end, &state);
         if(buf >= buf_end)
             break;
         --buf;
@@ -251,6 +251,13 @@ static int h264_parse(AVCodecParserContext *s,
         h->got_first = 1;
         if (avctx->extradata_size) {
             h->s.avctx = avctx;
+            // must be done like in the decoder.
+            // otherwise opening the parser, creating extradata,
+            // and then closing and opening again
+            // will cause has_b_frames to be always set.
+            // NB: estimate_timings_from_pts behaves exactly like this.
+            if (!avctx->has_b_frames)
+                h->s.low_delay = 1;
             ff_h264_decode_extradata(h);
         }
     }
@@ -330,14 +337,15 @@ static int init(AVCodecParserContext *s)
 {
     H264Context *h = s->priv_data;
     h->thread_context[0] = h;
+    h->s.slice_context_count = 1;
     return 0;
 }
 
 AVCodecParser ff_h264_parser = {
-    { CODEC_ID_H264 },
-    sizeof(H264Context),
-    init,
-    h264_parse,
-    close,
-    h264_split,
+    .codec_ids      = { CODEC_ID_H264 },
+    .priv_data_size = sizeof(H264Context),
+    .parser_init    = init,
+    .parser_parse   = h264_parse,
+    .parser_close   = close,
+    .split          = h264_split,
 };

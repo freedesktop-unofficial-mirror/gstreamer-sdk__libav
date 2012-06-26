@@ -228,7 +228,7 @@ static av_cold int decode_init(AVCodecContext *avctx) {
             av_log(avctx, AV_LOG_ERROR,
                    "CamStudio codec error: invalid depth %i bpp\n",
                    avctx->bits_per_coded_sample);
-            return 1;
+            return AVERROR_INVALIDDATA;
     }
     c->bpp = avctx->bits_per_coded_sample;
     c->pic.data[0] = NULL;
@@ -241,7 +241,7 @@ static av_cold int decode_init(AVCodecContext *avctx) {
     c->decomp_buf = av_malloc(c->decomp_size + AV_LZO_OUTPUT_PADDING);
     if (!c->decomp_buf) {
         av_log(avctx, AV_LOG_ERROR, "Can't allocate decompression buffer.\n");
-        return 1;
+        return AVERROR(ENOMEM);
     }
     return 0;
 }
@@ -255,15 +255,14 @@ static av_cold int decode_end(AVCodecContext *avctx) {
 }
 
 AVCodec ff_cscd_decoder = {
-    "camstudio",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_CSCD,
-    sizeof(CamStudioContext),
-    decode_init,
-    NULL,
-    decode_end,
-    decode_frame,
-    CODEC_CAP_DR1,
+    .name           = "camstudio",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_CSCD,
+    .priv_data_size = sizeof(CamStudioContext),
+    .init           = decode_init,
+    .close          = decode_end,
+    .decode         = decode_frame,
+    .capabilities   = CODEC_CAP_DR1,
     .long_name = NULL_IF_CONFIG_SMALL("CamStudio"),
 };
 
