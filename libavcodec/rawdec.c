@@ -59,6 +59,7 @@ static const PixelFormatTag pix_fmt_bps_mov[] = {
     { PIX_FMT_RGB555BE, 16 },
     { PIX_FMT_RGB24,    24 },
     { PIX_FMT_ARGB,     32 },
+    { PIX_FMT_MONOWHITE,33 },
     { PIX_FMT_NONE, 0 },
 };
 
@@ -118,14 +119,19 @@ static int raw_decode(AVCodecContext *avctx,
     const uint8_t *buf = avpkt->data;
     int buf_size = avpkt->size;
     RawVideoContext *context = avctx->priv_data;
+    int res;
 
     AVFrame * frame = (AVFrame *) data;
     AVPicture * picture = (AVPicture *) data;
 
+    frame->pict_type        = avctx->coded_frame->pict_type;
     frame->interlaced_frame = avctx->coded_frame->interlaced_frame;
     frame->top_field_first = avctx->coded_frame->top_field_first;
     frame->reordered_opaque = avctx->reordered_opaque;
     frame->pkt_pts          = avctx->pkt->pts;
+
+    if(buf_size < context->length - (avctx->pix_fmt==PIX_FMT_PAL8 ? 256*4 : 0))
+        return -1;
 
     //2bpp and 4bpp raw in avi and mov (yes this is ugly ...)
     if (context->buffer) {
@@ -151,10 +157,9 @@ static int raw_decode(AVCodecContext *avctx,
        avctx->codec_tag == MKTAG('A', 'V', 'u', 'p'))
         buf += buf_size - context->length;
 
-    if(buf_size < context->length - (avctx->pix_fmt==PIX_FMT_PAL8 ? 256*4 : 0))
-        return -1;
-
-    avpicture_fill(picture, buf, avctx->pix_fmt, avctx->width, avctx->height);
+    if ((res = avpicture_fill(picture, buf, avctx->pix_fmt,
+                              avctx->width, avctx->height)) < 0)
+        return res;
     if((avctx->pix_fmt==PIX_FMT_PAL8 && buf_size < context->length) ||
        (avctx->pix_fmt!=PIX_FMT_PAL8 &&
         (av_pix_fmt_descriptors[avctx->pix_fmt].flags & PIX_FMT_PAL))){
@@ -202,13 +207,12 @@ static av_cold int raw_close_decoder(AVCodecContext *avctx)
 }
 
 AVCodec ff_rawvideo_decoder = {
-    "rawvideo",
-    AVMEDIA_TYPE_VIDEO,
-    CODEC_ID_RAWVIDEO,
-    sizeof(RawVideoContext),
-    raw_init_decoder,
-    NULL,
-    raw_close_decoder,
-    raw_decode,
+    .name           = "rawvideo",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = CODEC_ID_RAWVIDEO,
+    .priv_data_size = sizeof(RawVideoContext),
+    .init           = raw_init_decoder,
+    .close          = raw_close_decoder,
+    .decode         = raw_decode,
     .long_name = NULL_IF_CONFIG_SMALL("raw video"),
 };

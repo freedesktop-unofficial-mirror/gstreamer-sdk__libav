@@ -1,7 +1,4 @@
-/**
- * @file
- * VP5 and VP6 compatible video decoder (common features)
- *
+/*
  * Copyright (C) 2006  Aurelien Jacobs <aurel@gnuage.org>
  *
  * This file is part of Libav.
@@ -21,6 +18,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+/**
+ * @file
+ * VP5 and VP6 compatible video decoder (common features)
+ */
+
 #ifndef AVCODEC_VP56_H
 #define AVCODEC_VP56_H
 
@@ -28,7 +30,6 @@
 #include "dsputil.h"
 #include "get_bits.h"
 #include "bytestream.h"
-#include "cabac.h"
 #include "vp56dsp.h"
 
 typedef struct vp56_context VP56Context;
@@ -46,7 +47,7 @@ typedef void (*VP56Filter)(VP56Context *s, uint8_t *dst, uint8_t *src,
 typedef void (*VP56ParseCoeff)(VP56Context *s);
 typedef void (*VP56DefaultModelsInit)(VP56Context *s);
 typedef void (*VP56ParseVectorModels)(VP56Context *s);
-typedef void (*VP56ParseCoeffModels)(VP56Context *s);
+typedef int  (*VP56ParseCoeffModels)(VP56Context *s);
 typedef int  (*VP56ParseHeader)(VP56Context *s, const uint8_t *buf,
                                 int buf_size, int *golden_frame);
 

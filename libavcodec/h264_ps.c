@@ -130,8 +130,8 @@ static inline int decode_hrd_parameters(H264Context *h, SPS *sps){
     get_bits(&s->gb, 4); /* bit_rate_scale */
     get_bits(&s->gb, 4); /* cpb_size_scale */
     for(i=0; i<cpb_count; i++){
-        get_ue_golomb(&s->gb); /* bit_rate_value_minus1 */
-        get_ue_golomb(&s->gb); /* cpb_size_value_minus1 */
+        get_ue_golomb_long(&s->gb); /* bit_rate_value_minus1 */
+        get_ue_golomb_long(&s->gb); /* cpb_size_value_minus1 */
         get_bits1(&s->gb);     /* cbr_flag */
     }
     sps->initial_cpb_removal_delay_length = get_bits(&s->gb, 5) + 1;
@@ -227,8 +227,7 @@ static inline int decode_vui_parameters(H264Context *h, SPS *sps){
         sps->num_reorder_frames= get_ue_golomb(&s->gb);
         get_ue_golomb(&s->gb); /*max_dec_frame_buffering*/
 
-        if(s->gb.size_in_bits < get_bits_count(&s->gb)){
-            av_log(h->s.avctx, AV_LOG_ERROR, "Overread VUI by %d bits\n", get_bits_count(&s->gb) - s->gb.size_in_bits);
+        if (get_bits_left(&s->gb) < 0) {
             sps->num_reorder_frames=0;
             sps->bitstream_restriction_flag= 0;
         }
@@ -237,6 +236,10 @@ static inline int decode_vui_parameters(H264Context *h, SPS *sps){
             av_log(h->s.avctx, AV_LOG_ERROR, "illegal num_reorder_frames %d\n", sps->num_reorder_frames);
             return -1;
         }
+    }
+    if (get_bits_left(&s->gb) < 0) {
+        av_log(h->s.avctx, AV_LOG_ERROR, "Overread VUI by %d bits\n", -get_bits_left(&s->gb));
+        return AVERROR_INVALIDDATA;
     }
 
     return 0;
@@ -329,8 +332,12 @@ int ff_h264_decode_seq_parameter_set(H264Context *h){
 
     if(sps->profile_idc >= 100){ //high profile
         sps->chroma_format_idc= get_ue_golomb_31(&s->gb);
-        if(sps->chroma_format_idc == 3)
+        if(sps->chroma_format_idc > 3) {
+            av_log(h->s.avctx, AV_LOG_ERROR, "chroma_format_idc (%u) out of range\n", sps->chroma_format_idc);
+            return -1;
+        } else if(sps->chroma_format_idc == 3) {
             sps->residual_color_transform_flag = get_bits1(&s->gb);
+        }
         sps->bit_depth_luma   = get_ue_golomb(&s->gb) + 8;
         sps->bit_depth_chroma = get_ue_golomb(&s->gb) + 8;
         sps->transform_bypass = get_bits1(&s->gb);
@@ -396,7 +403,8 @@ int ff_h264_decode_seq_parameter_set(H264Context *h){
 #endif
     sps->crop= get_bits1(&s->gb);
     if(sps->crop){
-        int crop_limit = sps->chroma_format_idc == 3 ? 16 : 8;
+        int crop_vertical_limit   = sps->chroma_format_idc  & 2 ? 16 : 8;
+        int crop_horizontal_limit = sps->chroma_format_idc == 3 ? 16 : 8;
         sps->crop_left  = get_ue_golomb(&s->gb);
         sps->crop_right = get_ue_golomb(&s->gb);
         sps->crop_top   = get_ue_golomb(&s->gb);
@@ -404,7 +412,7 @@ int ff_h264_decode_seq_parameter_set(H264Context *h){
         if(sps->crop_left || sps->crop_top){
             av_log(h->s.avctx, AV_LOG_ERROR, "insane cropping not completely supported, this could look slightly wrong ...\n");
         }
-        if(sps->crop_right >= crop_limit || sps->crop_bottom >= crop_limit){
+        if(sps->crop_right >= crop_horizontal_limit || sps->crop_bottom >= crop_vertical_limit){
             av_log(h->s.avctx, AV_LOG_ERROR, "brainfart cropping not supported, this could look slightly wrong ...\n");
         }
     }else{
@@ -462,10 +470,14 @@ int ff_h264_decode_picture_parameter_set(H264Context *h, int bit_length){
     unsigned int pps_id= get_ue_golomb(&s->gb);
     PPS *pps;
     const int qp_bd_offset = 6*(h->sps.bit_depth_luma-8);
+    int bits_left;
 
     if(pps_id >= MAX_PPS_COUNT) {
         av_log(h->s.avctx, AV_LOG_ERROR, "pps_id (%d) out of range\n", pps_id);
         return -1;
+    } else if (h->sps.bit_depth_luma > 10) {
+        av_log(h->s.avctx, AV_LOG_ERROR, "Unimplemented luma bit depth=%d (max=10)\n", h->sps.bit_depth_luma);
+        return AVERROR_PATCHWELCOME;
     }
 
     pps= av_mallocz(sizeof(PPS));
@@ -538,7 +550,9 @@ int ff_h264_decode_picture_parameter_set(H264Context *h, int bit_length){
     memcpy(pps->scaling_matrix4, h->sps_buffers[pps->sps_id]->scaling_matrix4, sizeof(pps->scaling_matrix4));
     memcpy(pps->scaling_matrix8, h->sps_buffers[pps->sps_id]->scaling_matrix8, sizeof(pps->scaling_matrix8));
 
-    if(get_bits_count(&s->gb) < bit_length){
+    bits_left = bit_length - get_bits_count(&s->gb);
+    if (bits_left && (bits_left > 8 ||
+                      show_bits(&s->gb, bits_left) != 1 << (bits_left - 1))) {
         pps->transform_8x8_mode= get_bits1(&s->gb);
         decode_scaling_matrices(h, h->sps_buffers[pps->sps_id], pps, 0, pps->scaling_matrix4, pps->scaling_matrix8);
         pps->chroma_qp_index_offset[1]= get_se_golomb(&s->gb); //second_chroma_qp_index_offset
